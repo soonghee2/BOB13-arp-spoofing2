@@ -208,29 +208,33 @@ int performArpAttack(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_m
 	return 1;
 }
 
+std::string generate_filter_exp(const Mac& my_mac) {
+    std::lock_guard<std::mutex> lock(relay_ip_match_mutex);
+    
+    if (sender_ips.empty()) {
+        return "ether dst " + std::string(my_mac);
+    }
+
+    std::string filter_exp = "ether dst " + std::string(my_mac) + " and (";
+    for (auto it = sender_ips.begin(); it != sender_ips.end(); ++it) {
+        if (it != sender_ips.begin()) {
+            filter_exp += " or ";
+        }
+        filter_exp += "ip host " + std::string(*it);
+    }
+    filter_exp += ") or (ether proto 0x0806)";
+    return filter_exp;
+}
+
 void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac) {
     while (true) {
         // Wait until the filter needs to be updated
         std::unique_lock<std::mutex> lock(filter_mutex);
         filter_cv.wait(lock, []{ return filter_needs_update.load(); });
 
-        std::string filter_exp = "(ether dst " + std::string(my_mac) + " and (";
-        {
-            std::lock_guard<std::mutex> lock(relay_ip_match_mutex);
-            if (sender_ips.empty()) { //continue;
-                filter_exp = "ether dst " + std::string(my_mac);
-            } else {
-                for (auto it = sender_ips.begin(); it != sender_ips.end(); ++it) {
-                    if (it != sender_ips.begin()) {
-                        filter_exp += " or ";
-                    }
-                    filter_exp += "ip host " + std::string(*it);
-                }
-            }
-        }
-        filter_exp += ")) or (ether proto 0x0806)";
-        
-        printf("filter_exp: %s", filter_exp.c_str());
+        std::string filter_exp = generate_filter_exp(my_mac);
+        printf("filter_exp: %s\n", filter_exp.c_str());
+
         struct bpf_program fp;
         if (pcap_compile(handle, &fp, filter_exp.c_str(), 0, PCAP_NETMASK_UNKNOWN) == -1) {
             fprintf(stderr, "pcap_compile failed: %s\n", pcap_geterr(handle));
@@ -242,6 +246,7 @@ void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac
             pcap_freecode(&fp);
             continue;
         }
+
         pcap_freecode(&fp);
 
         filter_needs_update = false;  // Reset the update flag
