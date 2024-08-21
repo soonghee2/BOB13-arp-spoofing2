@@ -1,0 +1,47 @@
+# Object files
+*.o
+
+# Executable files
+*.out
+*.exe
+*.bin
+
+# Libraries
+*.a
+*.so
+*.dll
+
+# Dependency files
+*.d
+
+# Debugging files
+*.gdb
+.gdb_history
+
+# Build directories
+/build/
+bin/
+obj/
+
+# IDE or editor-specific files
+.vscode/
+.idea/
+*.swp
+*~
+*.pro
+# Generated files by build tools
+config.log
+config.status
+Makefile
+Makefile.in
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CMakeLists.txt.user
+
+
+#backup
+main_backup*
+
+send-arp-test
+
