@@ -58,6 +58,7 @@ void usage() {
 	printf("syntax: send-arp-test <interface>\n");
 	printf("sample: send-arp-test wlan0\n");
 }
+//my_ip와 my_mac을 찾는 함수
 void find_my_ipmac(const char* dev, Ip *my_ip, Mac* my_mac){
 	struct ifreq s;
     int fd = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
@@ -78,7 +79,7 @@ void find_my_ipmac(const char* dev, Ip *my_ip, Mac* my_mac){
 
     close(fd);
 };
-
+//ARP packet 만드는 함수
 void make_send_packet(EthArpPacket &packet_send, const Mac& eth_sender_mac, const Mac& eth_target_mac, const Mac& arp_sender_mac, const Ip& sender_ip, const Mac& arp_target_mac, const Ip& target_ip, bool isrequest){
 	packet_send.eth_.type_ = htons(EthHdr::Arp);
 	packet_send.arp_.hrd_ = htons(ArpHdr::ETHER);
@@ -97,7 +98,7 @@ void make_send_packet(EthArpPacket &packet_send, const Mac& eth_sender_mac, cons
 	packet_send.arp_.tmac_ = arp_target_mac;
 	packet_send.arp_.tip_ = htonl(static_cast<uint32_t>(target_ip));
 }
-
+//sender의 arp table 위조
 void change_arp_table(pcap_t* handle,const Mac& my_mac, const Mac& sender_mac, const Ip& target_ip, const Ip& sender_ip){
 
 	EthArpPacket packet_send;
@@ -119,10 +120,10 @@ void change_arp_table(pcap_t* handle,const Mac& my_mac, const Mac& sender_mac, c
         
     } catch (const std::exception& e) { std::cerr << "Exception: " << e.what() << std::endl; }	
 };
-
+//mac address 얻기
 Mac get_mac_address(pcap_t* handle, const Mac my_mac, const Ip my_ip, const Ip& ip) {
     Mac new_mac_addr;
-    //use cache
+    //cache에 있으면 cache에서 꺼내서 return
     auto it = mac_cache.find(ip);
     if (it != mac_cache.end()) {
         new_mac_addr = it->second;
@@ -182,7 +183,7 @@ int performArpAttack(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_m
 
 	return 1;
 }
-
+//packet을 릴레이 해주는 함수
 void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac) {
     struct pcap_pkthdr* header;
     const u_char* packet;
@@ -196,7 +197,7 @@ void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac
         EthHdr* eth_hdr = (EthHdr*)packet;
 
         if (eth_hdr->dmac_ != my_mac) continue; // MAC 주소가 나의 MAC 주소가 아니면 패킷 무시
-
+	//Arp 패킷을 받으면 arp table 위조 다시 시도
         if (eth_hdr->type() == EthHdr::Arp) {
             ArpHdr* arp_hdr = (ArpHdr*)(packet + sizeof(EthHdr));
             Ip src_ip = arp_hdr->sip();
@@ -221,7 +222,7 @@ void relay_packets(pcap_t* handle, char* dev, const Ip& my_ip, const Mac& my_mac
             }
             printf("| Attack finished                                     |\n");
             printf("-------------------------------------------------------\n");
-                
+        //IPv4는 mac 주소만 바꾸고 패킷 릴레이
         } else if (eth_hdr->type() == EthHdr::Ip4) {
             IpHdr* ip_hdr = (IpHdr*)(packet + sizeof(EthHdr));
             Ip src_ip = ip_hdr->sip();
